@@ -12,6 +12,8 @@ NOTIFY_EMAIL = os.environ["NOTIFY_EMAIL"]
 # same email you used to sign up for Resend. Swap this once you verify a domain.
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "onboarding@resend.dev")
 
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -23,13 +25,6 @@ def load_json(path, default):
 def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-
-
-def fetch_product(url):
-    json_url = url.rstrip("/") + ".json"
-    resp = requests.get(json_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    return resp.json()["product"]
 
 
 def send_email(subject, body):
@@ -53,37 +48,63 @@ def send_email(subject, body):
         print("Email sent.")
 
 
+def check_shopify(url):
+    """Shopify stores expose a clean .json endpoint per product."""
+    json_url = url.rstrip("/") + ".json"
+    resp = requests.get(json_url, timeout=15, headers=HEADERS)
+    resp.raise_for_status()
+    product = resp.json()["product"]
+    title = product.get("title", url)
+    variants = {str(v["id"]): bool(v.get("available")) for v in product.get("variants", [])}
+    return title, variants
+
+
+def check_html_text(url, out_of_stock_text):
+    """For non-Shopify sites: available unless a known 'sold out' phrase is on the page."""
+    resp = requests.get(url, timeout=15, headers=HEADERS)
+    resp.raise_for_status()
+    is_out_of_stock = out_of_stock_text.lower() in resp.text.lower()
+    return url, {"default": not is_out_of_stock}
+
+
 def main():
     products = load_json(PRODUCTS_FILE, [])
     state = load_json(STATE_FILE, {})
 
     restocks = []
 
-    for url in products:
+    for entry in products:
+        # Old entries are plain Shopify URL strings; new entries are dicts
+        # with a "type" so we know how to check them.
+        if isinstance(entry, str):
+            entry = {"type": "shopify", "url": entry}
+
+        url = entry["url"]
+        ptype = entry.get("type", "shopify")
+
         try:
-            product = fetch_product(url)
+            if ptype == "shopify":
+                title, variants = check_shopify(url)
+            elif ptype == "html":
+                title, variants = check_html_text(url, entry["out_of_stock_text"])
+            else:
+                print(f"Unknown product type '{ptype}' for {url}", file=sys.stderr)
+                continue
         except Exception as e:
-            print(f"Error fetching {url}: {e}", file=sys.stderr)
+            print(f"Error checking {url}: {e}", file=sys.stderr)
             continue
 
-        title = product.get("title", url)
-        variants = product.get("variants", [])
-
         prev_variants = state.get(url, {})
-        new_variants = {}
 
-        for v in variants:
-            vid = str(v["id"])
-            available = bool(v.get("available"))
-            new_variants[vid] = available
-
+        for vid, available in variants.items():
             was_available = prev_variants.get(vid)
             # Only alert on a real transition (False -> True), never on the
-            # first run when we have no prior state for this variant yet.
+            # first run when we have no prior state for this item yet.
             if available and was_available is False:
-                restocks.append(f"{title} ({v.get('title', 'default')}) — {url}")
+                label = "" if vid == "default" else f" ({vid})"
+                restocks.append(f"{title}{label} — {url}")
 
-        state[url] = new_variants
+        state[url] = variants
 
     if restocks:
         body = "The following matcha just restocked:\n\n" + "\n".join(restocks)
