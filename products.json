@@ -5,5 +5,10 @@
   "https://matchamart.ca/products/yomo-no-kaori-150g",
   "https://matchamart.ca/products/samidori-30g",
   "https://matchamart.ca/products/yomo-no-kaori-30g",
-  "https://matchamart.ca/products/isuzu-40-%E4%BA%94%E5%8D%81%E9%88%B4"
+  "https://matchamart.ca/products/isuzu-40-%E4%BA%94%E5%8D%81%E9%88%B4",
+  {
+    "type": "html",
+    "url": "https://www.marukyu-koyamaen.co.jp/english/shop/products/1191040c1",
+    "out_of_stock_text": "currently out of stock and unavailable"
+  }
 ]
